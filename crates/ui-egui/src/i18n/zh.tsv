@@ -1521,6 +1521,10 @@ menu	View	视图
 	Xref	外部参照
 	Xref Clip Frame	外部参照剪裁边框
 	Ctrl+Enter to apply	Ctrl+Enter 应用
+	Enter Full Screen	进入全屏
+	Exit Full Screen	退出全屏
+	White Background	白色背景
+	Black Background	黑色背景
 	Edit Text	编辑文字
 	The drawing changed. Close the window and open it again.	图纸已切换。请关闭窗口后重新打开。
 

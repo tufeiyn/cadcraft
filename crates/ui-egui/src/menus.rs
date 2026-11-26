@@ -75,6 +75,19 @@ pub const CLEAR_RECENT: &str = "Clear Recent Files";
 const RECENT_ITEM: &str = "ui.recent.";
 pub const RECENT_CLEAR: &str = "ui.recent.clear";
 
+/// Full screen: the drawing alone, entered and left from View ▸ Full Screen, the context menu and Ctrl+0.
+pub const FULLSCREEN: &str = "ui.toggle.fullscreen";
+/// The full screen command's label while it enters full screen.
+pub const ENTER_FULLSCREEN: &str = "Enter Full Screen";
+/// Its label while it leaves full screen.
+pub const EXIT_FULLSCREEN: &str = "Exit Full Screen";
+/// The drawing's background, flipped between white and black (OPTIONS' `modelBackground`).
+pub const TOGGLE_BACKGROUND: &str = "ui.background.toggle";
+/// The background command's label while the background is not white.
+pub const WHITE_BACKGROUND: &str = "White Background";
+/// Its label while the background is white.
+pub const BLACK_BACKGROUND: &str = "Black Background";
+
 /// UI-only commands: (id, label, menu path, shortcut).
 pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.spacemouse", "3D Mouse...", &["Tools", "3D Mouse..."], None),
@@ -101,6 +114,9 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.toggle.statusbar", "Status Bar", &["Window", "Status Bar"], None),
     ("ui.toggle.cmdline", "Command Line", &["Window", "Command Line"], Some("Cmd+9")),
     ("ui.toggle.viewcube", "ViewCube", &["View", "ViewCube", "On"], None),
+    // Their labels name the way they go, so the path's last segment stays empty ([`live_label`]).
+    (FULLSCREEN, ENTER_FULLSCREEN, &["View", ""], Some("Cmd+0")),
+    (TOGGLE_BACKGROUND, WHITE_BACKGROUND, &["View", ""], None),
     ("ui.toggle.ucsicon", "UCS Icon", &["View", "UCS Icon", "On"], None),
     ("ui.toggle.ucsicon.origin", "UCS Icon at Origin", &["View", "UCS Icon", "Origin"], None),
     ("ui.theme.system", "Use System Setting", &["View", "Interface Theme", "Use System Setting"], None),
@@ -140,6 +156,23 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.noop", "", &[], None),
     ("ui.quit", "Quit CADCraft", &[], Some("Cmd+Q")),
 ];
+
+/// A toggle's label while it is up: Full Screen names the way it goes and the background command
+/// names the colour it sets next, so the menu and the context menu read the state.
+pub fn live_label<'a>(app: &CadApp, id: &str, label: &'a str) -> &'a str {
+    match id {
+        FULLSCREEN if app.fullscreen => EXIT_FULLSCREEN,
+        FULLSCREEN => ENTER_FULLSCREEN,
+        TOGGLE_BACKGROUND if background_is_white(app) => BLACK_BACKGROUND,
+        TOGGLE_BACKGROUND => WHITE_BACKGROUND,
+        _ => label,
+    }
+}
+
+/// Whether the drawing's background is white, so the background command offers black.
+pub fn background_is_white(app: &CadApp) -> bool {
+    app.options.model_background.is_some_and(|c| c == egui::Color32::WHITE)
+}
 
 pub fn is_ui_command(id: &str) -> bool {
     UI_COMMANDS.iter().any(|c| c.0 == id)
@@ -271,8 +304,7 @@ fn run_preference_command(app: &mut CadApp, id: &str, params: &Value) -> Option<
     Some(r)
 }
 
-fn run_ui_toggle_command(app: &mut CadApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
-    let toggle = |b: &mut bool, p: &Value| {
+fn run_ui_toggle_command(app: &mut CadApp, id: &str, params: &Value) -> Option<Result<Value, String>> {    let toggle = |b: &mut bool, p: &Value| {
         *b = p.get("on").and_then(Value::as_bool).unwrap_or(!*b);
     };
     let result = match id {
@@ -302,6 +334,17 @@ fn run_ui_toggle_command(app: &mut CadApp, id: &str, params: &Value) -> Option<R
         "ui.toggle.cmdline" => {
             toggle(&mut app.ui.show_command_line, params);
             Ok(Value::Null)
+        }
+        FULLSCREEN => {
+            let on = params.get("on").and_then(Value::as_bool).unwrap_or(!app.fullscreen);
+            app.set_fullscreen(on);
+            Ok(json!({ "fullscreen": app.fullscreen }))
+        }
+        // The background flips between white and black through OPTIONS' own `modelBackground`, so the
+        // Options dialog, the profile and the renderer all see the same value.
+        TOGGLE_BACKGROUND => {
+            let color = if background_is_white(app) { "#000000" } else { "#ffffff" };
+            app.run("options", json!({ "modelBackground": color }))
         }
         "ui.toggle.systemcursor" => {
             toggle(&mut app.ui.system_cursor, params);
@@ -736,7 +779,7 @@ pub fn tree(app: &CadApp) -> Vec<(String, Vec<Entry>)> {
         if !menu.is_empty() {
             // The UCS icon is a setting of the drawing: off the menu's reach when none is open.
             let enabled = !id.starts_with("ui.toggle.ucsicon") || app.session.doc().is_ok();
-            add(menu, label, id, *sc, enabled);
+            add(menu, live_label(app, id, label), id, *sc, enabled);
         }
     }
     if let Some((_, file)) = out.iter_mut().find(|(m, _)| m == "File") {
@@ -979,6 +1022,7 @@ pub(crate) fn builtin_shortcuts() -> Vec<(egui::KeyboardShortcut, &'static str)>
         (sc(cmd, Key::Num1), "ui.panel.properties"),
         (sc(cmd, Key::Num3), "ui.toggle.toolsets"),
         (sc(cmd, Key::Num9), "ui.toggle.cmdline"),
+        (sc(cmd, Key::Num0), FULLSCREEN),
         (sc(Modifiers::NONE, Key::F1), "ui.dialog.commands"),
         (sc(Modifiers::NONE, Key::F2), "ui.toggle.history"),
         (sc(Modifiers::NONE, Key::F3), "osnap"),
@@ -1256,6 +1300,44 @@ mod reference_order_tests {
         let app = CadApp::new(Session::new(), Services::default());
         let edit = tree(&app).into_iter().find(|(m, _)| m == "Edit").map(|(_, e)| e).unwrap_or_default();
         assert_eq!(edit.iter().take(2).map(label).collect::<Vec<_>>(), ["Undo", "Redo"]);
+    }
+}
+
+#[cfg(test)]
+mod display_toggle_tests {
+    use cadcraft_engine::Session;
+    use serde_json::json;
+
+    use super::{BLACK_BACKGROUND, ENTER_FULLSCREEN, EXIT_FULLSCREEN, FULLSCREEN, TOGGLE_BACKGROUND, WHITE_BACKGROUND, live_label, run_ui_command};
+    use crate::{CadApp, Services};
+
+    fn app() -> CadApp {
+        CadApp::new(Session::new(), Services::default())
+    }
+
+    /// The full screen item is the switch: running it enters, and it names the way out until run again.
+    #[test]
+    fn full_screen_toggles_and_the_item_names_the_way_out() {
+        let mut app = app();
+        assert_eq!(live_label(&app, FULLSCREEN, ENTER_FULLSCREEN), ENTER_FULLSCREEN);
+        run_ui_command(&mut app, FULLSCREEN, &json!(null)).unwrap().unwrap();
+        assert!(app.fullscreen);
+        assert_eq!(live_label(&app, FULLSCREEN, ENTER_FULLSCREEN), EXIT_FULLSCREEN);
+        run_ui_command(&mut app, FULLSCREEN, &json!({ "on": false })).unwrap().unwrap();
+        assert!(!app.fullscreen);
+        assert_eq!(live_label(&app, FULLSCREEN, ENTER_FULLSCREEN), ENTER_FULLSCREEN);
+    }
+
+    /// The background item sets the other colour each time, and is named for the colour it will set.
+    #[test]
+    fn the_background_flips_between_white_and_black() {
+        let mut app = app();
+        run_ui_command(&mut app, TOGGLE_BACKGROUND, &json!(null)).unwrap().unwrap();
+        assert_eq!(app.options.model_background, Some(egui::Color32::WHITE));
+        assert_eq!(live_label(&app, TOGGLE_BACKGROUND, WHITE_BACKGROUND), BLACK_BACKGROUND);
+        run_ui_command(&mut app, TOGGLE_BACKGROUND, &json!(null)).unwrap().unwrap();
+        assert_eq!(app.options.model_background, Some(egui::Color32::BLACK));
+        assert_eq!(live_label(&app, TOGGLE_BACKGROUND, WHITE_BACKGROUND), WHITE_BACKGROUND);
     }
 }
 

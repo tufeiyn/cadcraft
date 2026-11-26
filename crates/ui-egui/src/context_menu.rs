@@ -84,6 +84,21 @@ fn sub(label: &str, children: Vec<Entry>) -> Option<Entry> {
     (!children.is_empty()).then(|| Entry::Sub { label: label.into(), children })
 }
 
+/// View's items that only the interface owns: full screen and the drawing's background, each named
+/// for the state it goes to next, so the menu reads as the switch it is.
+fn display_entries(app: &CadApp) -> Vec<Entry> {
+    let manual = |label: &str, id: &str, shortcut: Option<&str>| Entry::Item {
+        label: crate::menus::live_label(app, id, label).to_string(),
+        id: id.to_string(),
+        shortcut: shortcut.map(str::to_string),
+        enabled: true,
+    };
+    vec![
+        manual(crate::menus::ENTER_FULLSCREEN, crate::menus::FULLSCREEN, Some("Cmd+0")),
+        manual(crate::menus::WHITE_BACKGROUND, crate::menus::TOGGLE_BACKGROUND, None),
+    ]
+}
+
 /// Push a group unless it is empty.
 fn push(groups: &mut Vec<Vec<Entry>>, group: Vec<Entry>) {
     if !group.is_empty() {
@@ -129,7 +144,9 @@ pub fn entries(app: &CadApp) -> Vec<Vec<Entry>> {
         push(&mut groups, object_entries(app));
         push(&mut groups, items(app, SELECT));
     }
-    push(&mut groups, items(app, VIEW));
+    let mut view = items(app, VIEW);
+    view.extend(display_entries(app));
+    push(&mut groups, view);
     push(&mut groups, items(app, TOOLS));
     let mut last = if selected { items(app, &["properties"]) } else { Vec::new() };
     last.extend(items(app, SETTINGS));

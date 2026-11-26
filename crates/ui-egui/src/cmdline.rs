@@ -434,6 +434,11 @@ pub fn keyboard(app: &mut CadApp, ctx: &egui::Context) {
             egui::Event::Ime(_) => {}
             egui::Event::Key { key, pressed: true, repeat, modifiers, .. } => match key {
                 Key::Enter => submit(app),
+                // In full screen Escape leaves full screen first, but only with nothing else to cancel: a
+                // dialog, typed text or a running prompt keeps Escape's usual meaning.
+                Key::Escape if app.fullscreen && app.ui.dialog.is_none() && app.cmd.buffer.trim().is_empty() && !app.session.prompting() => {
+                    let _ = app.run(crate::menus::FULLSCREEN, serde_json::json!({ "on": false }));
+                }
                 Key::Escape => escape(app),
                 Key::Backspace => {
                     let press = KeyPress { repeat, plain: !(modifiers.alt || modifiers.ctrl || modifiers.command) };

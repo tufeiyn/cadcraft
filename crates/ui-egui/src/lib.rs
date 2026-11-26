@@ -313,6 +313,13 @@ pub struct CadApp {
     /// Drawings being read on worker threads ([`opening`]).
     pub opening: opening::Opening,
     pub integrated_titlebar: bool,
+    /// Full screen: the drawing alone, without the window's chrome or its docked panels
+    /// ([`Self::set_fullscreen`]).
+    pub(crate) fullscreen: bool,
+    /// The full-screen state the window takes on the next pass; `None` once the command was sent.
+    fullscreen_request: Option<bool>,
+    /// Frames left before the window's own full-screen report is trusted again after a request.
+    fullscreen_settle: u8,
     control_rx: Option<Receiver<ControlRequest>>,
     /// Fresh surface and identity snapshot (see [`capture`]).
     pub(crate) capture_geometry: Option<capture::CaptureGeometry>,
@@ -418,6 +425,9 @@ impl CadApp {
             status: None,
             opening: opening::Opening::default(),
             integrated_titlebar: false,
+            fullscreen: false,
+            fullscreen_request: None,
+            fullscreen_settle: 0,
             control_rx: None,
             capture_geometry: None,
             capture_epoch: 0,
@@ -1002,7 +1012,38 @@ impl CadApp {
     /// pass of a multi-pass frame, and also on hidden logic-only ticks where no pass runs and the
     /// pass index is zero. `current_pass_index() == 0` is therefore the frame guard: true on the
     /// first pass and every hidden tick, false on later passes.
+    /// Enter or leave full screen: the window takes it on the next pass, and the drawing then fills
+    /// the window alone. The docked panels, the menu and the bars keep their own switches, so leaving
+    /// full screen shows the arrangement the user had, even after a restart from full screen.
+    pub fn set_fullscreen(&mut self, on: bool) {
+        if self.fullscreen == on && self.fullscreen_request.is_none() {
+            return;
+        }
+        self.fullscreen = on;
+        self.fullscreen_request = Some(on);
+        // A window can swallow the first request and keep reporting its old state for a few frames,
+        // so the request is repeated until the window agrees, then the report is trusted again.
+        self.fullscreen_settle = 12;
+    }
+
     pub fn logic(&mut self, ctx: &egui::Context) {
+        if let Some(on) = self.fullscreen_request {
+            // The web runner has no window of its own to make full screen.
+            #[cfg(not(target_arch = "wasm32"))]
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(on));
+            let reported = ctx.input(|i| i.viewport().fullscreen);
+            self.fullscreen_settle = self.fullscreen_settle.saturating_sub(1);
+            if reported == Some(on) || self.fullscreen_settle == 0 {
+                self.fullscreen_request = None;
+            }
+        }
+        // The window can also leave full screen on its own (F11, the window menu): the drawing follows
+        // it, but only while no request of ours is waiting for the window.
+        if self.fullscreen_request.is_none() {
+            if let Some(on) = ctx.input(|i| i.viewport().fullscreen) {
+                self.fullscreen = on;
+            }
+        }
         // Consume-based queues: each item is handled once, whichever callback delivers it. A
         // reply arriving during a later pass is never starved until the next frame.
         self.drain_control(ctx);
@@ -1209,22 +1250,29 @@ impl CadApp {
         self.sync_bars();
         control::begin_frame(ui.ctx());
         let t = theme::Tokens::get();
-        chrome::title_and_toolbar(self, ui);
-        if self.ui.in_window_menu {
-            menus::menu_bar(self, ui);
-        }
-        if self.ui.show_status_bar {
-            chrome::status_bar(self, ui);
-        }
-        if self.ui.show_file_tabs {
-            chrome::file_tabs(self, ui);
+        // Full screen is the drawing alone: the title bar and toolbar, the menu, the status bar, the
+        // file tabs and the standalone tool-set strip are all chrome, and the docked panels go too.
+        if !self.fullscreen {
+            chrome::title_and_toolbar(self, ui);
+            if self.ui.in_window_menu {
+                menus::menu_bar(self, ui);
+            }
+            if self.ui.show_status_bar {
+                chrome::status_bar(self, ui);
+            }
+            if self.ui.show_file_tabs {
+                chrome::file_tabs(self, ui);
+            }
         }
         let has_doc = !self.session.docs.is_empty() && !self.ui.start_tab;
-        if has_doc && !self.ui.show_toolsets {
+        if has_doc && !self.ui.show_toolsets && !self.fullscreen {
             palettes::toolsets_strip(self, ui);
         }
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
-            if has_doc {
+            if has_doc && self.fullscreen {
+                ui.painter().rect_filled(ui.max_rect(), 0.0, t.canvas);
+                canvas::show(self, ui);
+            } else if has_doc {
                 docking::show(self, ui);
             } else {
                 self.canvas.shown = None;

@@ -588,8 +588,11 @@ fn paint_pointer_overlay(frame: &mut CanvasPaint<'_>, paper_rect: Option<Rect>, 
     if !crate::parametric::take_keyboard(app) {
         crate::cmdline::keyboard(app, ui.ctx());
     }
-    // Command line overlay.
-    if app.ui.show_command_line {
+    // Command line overlay. In full screen the overlay is part of the chrome, so it stays hidden until
+    // the user actually types or a command prompts, which keeps typing usable without a bar on screen.
+    let command_line_visible = app.ui.show_command_line
+        && (!app.fullscreen || app.session.prompting() || !app.cmd.buffer.trim().is_empty());
+    if command_line_visible {
         crate::cmdline::show(app, ui, full);
     }
     // Crosshair cursor.
